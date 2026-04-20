@@ -26,7 +26,7 @@ BASE_URL = os.environ.get("RIGHT_FORUM_URL", "https://www.right.com.cn/forum").r
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/131.0.0.0 Safari/537.36"
+    "Chrome/143.0.0.0 Safari/537.36"
 )
 
 # 签到消息
@@ -51,8 +51,16 @@ def build_session(cookie_str: str) -> requests.Session:
     s = requests.Session()
     s.headers.update({
         "User-Agent": UA,
-        "Accept": "text/html,application/xhtml+xml,*/*",
-        "Accept-Language": "zh-CN,zh;q=0.9",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Cache-Control": "max-age=0",
     })
 
     # 设置重试
@@ -126,6 +134,23 @@ def check_login(session: requests.Session) -> str | None:
     logger.info(f"Response status: {r.status_code}, final URL: {r.url}")
     logger.info(f"Response length: {len(body)} chars")
 
+    # 检测 Cloudflare 保护
+    if r.status_code == 521 or 'window.onload=setTimeout' in body or 'Cloudflare' in body:
+        logger.warning("Cloudflare protection detected. Trying to bypass...")
+        # 尝试使用更真实的浏览器模拟
+        session.headers.update({
+            "Referer": BASE_URL,
+            "Origin": BASE_URL,
+        })
+        # 尝试再次请求
+        try:
+            r = session.get(f"{BASE_URL}/forum.php", timeout=15, allow_redirects=True)
+            body = decode_response(r)
+            logger.info(f"Second response status: {r.status_code}")
+        except Exception as e:
+            logger.error(f"Second request failed: {e}")
+            return None
+
     # 检查登录标记
     if "退出" in body or "注销" in body or "logging" in body:
         # 多种方式提取用户名
@@ -150,6 +175,8 @@ def check_login(session: requests.Session) -> str | None:
     # 输出调试信息帮助排查
     if len(body) < 500:
         logger.warning(f"Short response body: {body[:300]}")
+    elif len(body) > 500:
+        logger.warning(f"Response body sample: {body[:500]}")
 
     logger.warning("Cookie expired or invalid — no login markers found")
     return None
@@ -273,6 +300,7 @@ def do_sign(session: requests.Session, formhash: str) -> tuple[bool, str, dict]:
     
     # 尝试不同的签到页面路径
     sign_paths = [
+        "/erling_qd-sign_in.html",
         "/plugin.php?id=dsu_paulsign:sign",
         "/plugin.php?id=签到插件ID:sign",
         "/forum.php?mod=sign",
