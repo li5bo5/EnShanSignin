@@ -334,10 +334,48 @@ def do_sign(session: requests.Session, formhash: str) -> tuple[bool, str, dict]:
     except Exception as e:
         return False, f"Cannot access sign page: {e}", {}
 
-    if "今日已签" in page_body or "已经签到" in page_body:
+    # 更准确地检测用户个人的签到状态
+    # 避免误判页面上的统计信息（如"今日已签到：3406人"）
+    logger.info("Checking sign status...")
+    
+    # 检查是否存在"立即签到"按钮
+    if "立即签到" in page_body:
+        logger.info("Found '立即签到' button - user not signed yet")
+    else:
+        logger.info("No '立即签到' button found - user may already signed")
+    
+    # 检查是否已经签到
+    is_signed = False
+    
+    # 检查个人签到状态
+    personal_sign_patterns = [
+        r'您已签到',
+        r'个人已签到',
+        r'今日已签',
+        r'已经签到',
+        r'签到成功',
+        r'已完成签到',
+    ]
+    
+    for pattern in personal_sign_patterns:
+        if pattern in page_body:
+            # 检查是否是统计信息，避免误判
+            if (pattern == "今日已签" or pattern == "今日已签到") and "今日已签到：" in page_body:
+                # 这是统计信息，不是个人签到状态
+                logger.info(f"Found statistical info: {pattern}")
+                continue
+            is_signed = True
+            logger.info(f"Found personal sign status: {pattern}")
+            break
+    
+    if is_signed:
         stats = extract_sign_stats(page_body)
         logger.info(f"Already signed, stats: {stats}")
         return True, "今日已签到", stats
+    
+    # 如果存在"立即签到"按钮，说明用户还没有签到
+    if "立即签到" in page_body:
+        logger.info("User not signed yet, proceeding to sign")
 
     # 从签到页提取可用的心情值（如果有）
     mood_options = re.findall(r'name="qdxq"\s+value="(\w+)"', page_body)
@@ -346,6 +384,33 @@ def do_sign(session: requests.Session, formhash: str) -> tuple[bool, str, dict]:
     
     # 尝试不同的签到参数
     sign_params = [
+        # 二零CMS 签到系统 - 直接提交
+        {
+            "url": sign_url,
+            "data": {
+                "formhash": formhash,
+                "submit": "立即签到",
+                "mod": "plugin",
+                "id": "erling_qd:sign_in",
+            }
+        },
+        # 二零CMS 签到系统 - 带操作参数
+        {
+            "url": sign_url,
+            "data": {
+                "formhash": formhash,
+                "operation": "qiandao",
+                "submit": "立即签到",
+            }
+        },
+        # 通用签到
+        {
+            "url": sign_url,
+            "data": {
+                "formhash": formhash,
+                "submit": "签到",
+            }
+        },
         # 标准 dsu_paulsign
         {
             "url": f"{BASE_URL}/plugin.php?id=dsu_paulsign:sign&operation=qiandao&infloat=1&inajax=1",
@@ -356,23 +421,6 @@ def do_sign(session: requests.Session, formhash: str) -> tuple[bool, str, dict]:
                 "faession": "1",
                 "todaysay": random.choice(MESSAGES),
                 "fastreply": "0",
-            }
-        },
-        # 通用签到
-        {
-            "url": sign_url,
-            "data": {
-                "formhash": formhash,
-                "todaysay": random.choice(MESSAGES),
-                "submit": "签到",
-            }
-        },
-        # 简化版签到
-        {
-            "url": sign_url,
-            "data": {
-                "formhash": formhash,
-                "submit": "签到",
             }
         },
     ]
@@ -390,18 +438,30 @@ def do_sign(session: requests.Session, formhash: str) -> tuple[bool, str, dict]:
 
         logger.info(f"Response ({len(body)} chars): {body[:500]}")
 
-        if "今日已签" in body or "已经签到" in body:
+        # 检查是否是统计信息，避免误判
+        if "今日已签" in body and "今日已签到：" in body:
+            logger.info("Response contains statistical info, not personal sign status")
+        elif "今日已签" in body or "已经签到" in body:
             stats = extract_sign_stats(body)
+            logger.info(f"Sign status detected: 今日已签, stats: {stats}")
             return True, "今日已签到", stats
 
         # 签到成功
         if "签到成功" in body or "恭喜" in body or "获得" in body:
             stats = extract_sign_stats(body)
+            logger.info(f"Sign success detected: {stats}")
             return True, "签到成功", stats
 
         # Discuz 签到弹窗：有"签到提示"标题 + hideWindow = 成功
         if "签到提示" in body and "hideWindow" in body:
             stats = extract_sign_stats(body)
+            logger.info(f"Sign popup success: {stats}")
+            return True, "签到成功", stats
+
+        # 二零CMS 签到成功
+        if "签到成功" in body or "获得" in body or "积分" in body:
+            stats = extract_sign_stats(body)
+            logger.info(f"二零CMS sign success: {stats}")
             return True, "签到成功", stats
 
         if "不正确" in body or "请重新选择" in body:
@@ -410,6 +470,9 @@ def do_sign(session: requests.Session, formhash: str) -> tuple[bool, str, dict]:
 
         if "未登录" in body or "请先登录" in body:
             return False, "Cookie expired", {}
+
+        # 输出详细的响应内容，帮助调试
+        logger.info(f"Full response sample: {body[:1000]}")
 
     return False, "All sign attempts failed", {}
 
