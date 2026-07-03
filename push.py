@@ -61,7 +61,6 @@ def push_telegram(text: str):
     data = {
         "chat_id": TG_CHAT_ID,
         "text": text,
-        "parse_mode": "MarkdownV2",
     }
     try:
         r = requests.post(url, json=data, timeout=10)
