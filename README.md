@@ -1,6 +1,6 @@
 # Right.com.cn 论坛每日自动签到脚本
 
-自动签到 `https://www.right.com.cn/forum/forum.php` 论坛，支持推送通知。
+自动签到 `https://www.right.com.cn/forum/forum.php` 论坛，推送tg通知。
 
 ## 功能特点
 
